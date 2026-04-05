@@ -111,6 +111,7 @@
 // 29-04-2025, ES: Allow special treat of "mute"-command, Pako2 wish.
 //                 Correction tracks bug on SD card, Pako2 suggestion.
 // 29-06-2025, ES: Changed I2S_COMM_FORMAT_STAND_I2MSB into I2S_COMM_FORMAT_STAND_MSB.
+// 05-04-2026, GvO, Added second encoder (starting at this day)
 
 //
 // Define the version number, the format used is the HTTP standard.
@@ -250,6 +251,13 @@ struct ini_struct
   int8_t         enc_sw_pin ;                         // GPIO connected to SW of rotary encoder / ZIPPY B5
   int8_t         enc_up_pin ;                         // GPIO connected to UP of ZIPPY B5 side switch
   int8_t         enc_dwn_pin ;                        // GPIO connected to DOWN of ZIPPY B5 side switch
+  #ifdef SECOND_ENCODER
+  int8_t         enc2_clk_pin ;                        // GPIO connected to CLK of rotary encoder
+  int8_t         enc2_dt_pin ;                         // GPIO connected to DT of rotary encoder2
+  int8_t         enc2_sw_pin ;                         // GPIO connected to SW of rotary encoder2 / ZIPPY B5
+  int8_t         enc2_up_pin ;                         // GPIO connected to UP of ZIPPY B5 side switch2
+  int8_t         enc2_dwn_pin ;                        // GPIO connected to DOWN of ZIPPY B5 side switch2
+#endif
   int8_t         tft_cs_pin ;                         // GPIO connected to CS of TFT screen
   int8_t         tft_dc_pin ;                         // GPIO connected to D/C or A0 of TFT screen
   int8_t         tft_scl_pin ;                        // GPIO connected to SCL of i2c TFT screen
@@ -388,6 +396,8 @@ RTC_NOINIT_ATTR char    nvskeys[MAXKEYS][NVS_KEY_NAME_MAX_SIZE] ; // Space for N
 
 // Rotary encoder stuff
 #define sv DRAM_ATTR static volatile
+enum enc_menu_t { VOLUME, PRESET, TRACK } ;              // State for rotary encoder menu
+// First rotary encoder (on by default)
 sv uint16_t       clickcount = 0 ;                       // Incremented per encoder click
 sv int16_t        rotationcount = 0 ;                    // Current position of rotary switch
 sv uint16_t       enc_inactivity = 0 ;                   // Time inactive
@@ -395,9 +405,21 @@ sv bool           singleclick = false ;                  // True if single click
 sv bool           doubleclick = false ;                  // True if double click detected
 sv bool           tripleclick = false ;                  // True if triple click detected
 sv bool           longclick = false ;                    // True if longclick detected
-enum enc_menu_t { VOLUME, PRESET, TRACK } ;              // State for rotary encoder menu
 enc_menu_t        enc_menu_mode = VOLUME ;               // Default is VOLUME mode
 //
+
+// Second rotary encoder stuff
+#ifdef SECOND_ENCODER
+  sv uint16_t       enc2_clickcount = 0 ;                       // Incremented per encoder click
+  sv int16_t        enc2_rotationcount = 0 ;                    // Current position of rotary switch
+  sv uint16_t       enc2_inactivity = 0 ;                   // Time inactive
+  sv bool           enc2_singleclick = false ;                  // True if single click detected
+  sv bool           enc2_doubleclick = false ;                  // True if double click detected
+  sv bool           enc2_tripleclick = false ;                  // True if triple click detected
+  sv bool           enc2_longclick = false ;                    // True if longclick detected
+  enc_menu_t        enc2_menu_mode = VOLUME ;               // Default is VOLUME mode
+#endif
+
 struct progpin_struct                                    // For programmable input pins
 {
   int8_t         gpio ;                                  // Pin number
@@ -1032,6 +1054,10 @@ void IRAM_ATTR timer100()
   sv int16_t   count10sec = 0 ;                   // Counter for activatie 10 seconds process
   sv int16_t   eqcount = 0 ;                      // Counter for equal number of clicks
   sv int16_t   oldclickcount = 0 ;                // To detect difference
+#ifdef SECOND_ENCODER
+  sv int16_t   enc2_eqcount = 0 ;                      // Counter for equal number of clicks
+  sv int16_t   enc2_oldclickcount = 0 ;                // To detect difference
+#endif
 
   spftrigger = true ;                             // Activate spfuncs
   if ( ++count10sec == 100  )                     // 10 seconds passed?
@@ -1065,6 +1091,7 @@ void IRAM_ATTR timer100()
   {
     enc_inactivity++ ;
   }
+
   // Now detection of single/double click of rotary encoder switch or ZIPPY B5
   if ( clickcount )                               // Any click?
   {
@@ -1094,6 +1121,46 @@ void IRAM_ATTR timer100()
       eqcount = 0 ;                               // Not stable, reset count
     }
   }
+
+   // Handle second rotary encoder
+#ifdef SECOND_ENCODER
+   // Handle rotary encoder. Inactivity counter will be reset by encoder interrupt
+  if ( enc2_inactivity < 36000 )                   // Count inactivity time, but limit to 36000
+  {
+    enc2_inactivity++ ;
+  }
+
+  // Now detection of single/double click of rotary encoder switch or ZIPPY B5
+  if ( enc2_clickcount )                               // Any click?
+  {
+    if ( enc2_oldclickcount == enc2_clickcount )            // Yes, stable situation?
+    {
+      if ( ++enc2_eqcount == 6 )                       // Long time stable?
+      {
+        enc2_eqcount = 0 ;
+        if ( enc2_clickcount > 2 )                     // Triple click?
+        {
+          enc2_tripleclick = true ;                    // Yes, set result
+        }
+        else if ( enc2_clickcount == 2 )               // Double click?
+        {
+          enc2_doubleclick = true ;                    // Yes, set result
+        }
+        else
+        {
+          enc2_singleclick = true ;                    // Just one click seen
+        }
+        enc2_clickcount = 0 ;                          // Reset number of clicks
+      }
+    }
+    else
+    {
+      enc2_oldclickcount = enc2_clickcount ;                // To detect change
+      enc2_eqcount = 0 ;                               // Not stable, reset count
+    }
+  }
+#endif
+
 }
 
 
@@ -1275,6 +1342,135 @@ void IRAM_ATTR isr_enc_switch()
     enc_inactivity = 0 ;                                          // Mark activity
   }
 #endif
+
+#ifdef SECOND_ENCODER
+//**************************************************************************************************
+//                                          I S R _ E N C 2 _ S W I T C H                            *
+//**************************************************************************************************
+// Interrupts received from rotary encoder2 switch or ZIPPY B5.                                     *
+//**************************************************************************************************
+void IRAM_ATTR isr_enc2_switch()
+{
+  sv uint32_t     oldtime = 0 ;                            // Time in millis previous interrupt
+  sv bool         sw_state ;                               // True is pushed (LOW)
+  bool            newstate ;                               // Current state of input signal
+  uint32_t        newtime ;                                // Current timestamp
+  uint32_t        dtime ;                                  // Time difference with previous interrupt
+
+  newstate = ( digitalRead ( ini_block.enc2_sw_pin ) == LOW ) ;
+  newtime = xTaskGetTickCount() ;                          // Time of last interrupt
+  dtime = ( newtime - oldtime ) & 0xFFFF ;                 // Compute delta
+  if ( dtime < 50 )                                        // Debounce
+  {
+    return ;                                               // Ignore bouncing
+  }
+  if ( newstate != sw_state )                              // State changed?
+  {
+    oldtime = newtime ;                                    // Time of change for next compare
+    sw_state = newstate ;                                  // Yes, set current (new) state
+    if ( !sw_state )                                       // SW released?
+    {
+      if ( ( dtime ) > 2000 )                              // More than 2 second?
+      {
+        enc2_longclick = true ;                                 // Yes, register longclick
+        enc2_clickcount = 0 ;                                   // Forget normal count
+      }
+      else
+      {
+        enc2_clickcount++ ;                                     // Yes, click detected
+      }
+      enc2_inactivity = 0 ;                                 // Not inactive anymore
+    }
+  }
+}
+
+#ifdef ZIPPYB5
+  // NOTE: THE ZIPPYB5 for SECOND_ENCODER WAS NOT TESTE!
+  //**************************************************************************************************
+  //                                          I S R _ E N C 2 _ T U R N                              *
+  //**************************************************************************************************
+  // Interrupts received from ZIPPY B5 side switch (clk signal) knob turn of second encoder          *
+  //**************************************************************************************************
+  void IRAM_ATTR isr_enc2_turn()
+  {
+    sv uint32_t     trig_time = 0 ;                               // For debounce
+    uint32_t        new_time ;                                    // New time
+
+    new_time = xTaskGetTickCount() ;                              // Get time
+    if ( new_time <= trig_time )                                  // For debounce
+    {
+      return ;                                                    // No action
+    }
+    trig_time = new_time + 300 ;                                  // Dead time 
+    if ( digitalRead ( ini_block.enc2_up_pin ) == LOW )            // Up pin activated?
+    {
+      enc2_rotationcount++ ;
+    }
+    else if ( digitalRead ( ini_block.enc2_dwn_pin ) == LOW )      // Down pin activated?
+    {
+      enc2_rotationcount-- ;
+    }
+    enc2_inactivity = 0 ;                                          // Mark activity
+  }
+#else
+  //**************************************************************************************************
+  //                                          I S R _ E N C 2 _ T U R N                                *
+  //**************************************************************************************************
+  // Interrupts received from rotary encoder 2 (clk signal) knob turn.                                 *
+  // The encoder is a Manchester coded device, the outcomes (-1,0,1) of all the previous state and   *
+  // actual state are stored in the enc_states[].                                                    *
+  // Full_status is a 4 bit variable, the upper 2 bits are the previous encoder values, the lower    *
+  // ones are the actual ones.                                                                       *
+  // 4 bits cover all the possible previous and actual states of the 2 PINs, so this variable is     *
+  // the index enc_states[].                                                                         *
+  // No debouncing is needed, because only the valid states produce values different from 0.         *
+  // Rotation is 4 if position is moved from one fixed position to the next, so it is devided by 4.  *
+  //**************************************************************************************************
+  void IRAM_ATTR isr_enc2_turn()
+  {
+    sv uint32_t     old_state = 0x0001 ;                          // Previous state
+    sv int16_t      locrotcount = 0 ;                             // Local rotation count
+    uint8_t         act_state = 0 ;                               // The current state of the 2 PINs
+    uint8_t         inx ;                                         // Index in enc_state
+    sv const int8_t enc_states [] =                               // Table must be in DRAM (iram safe)
+    { 0,                    // 00 -> 00
+      -1,                   // 00 -> 01                           // dt goes HIGH
+      1,                    // 00 -> 10
+      0,                    // 00 -> 11
+      1,                    // 01 -> 00                           // dt goes LOW
+      0,                    // 01 -> 01
+      0,                    // 01 -> 10
+      -1,                   // 01 -> 11                           // clk goes HIGH
+      -1,                   // 10 -> 00                           // clk goes LOW
+      0,                    // 10 -> 01
+      0,                    // 10 -> 10
+      1,                    // 10 -> 11                           // dt goes HIGH
+      0,                    // 11 -> 00
+      1,                    // 11 -> 01                           // clk goes LOW
+      -1,                   // 11 -> 10                           // dt goes HIGH
+      0                     // 11 -> 11
+    } ;
+    // Read current state of CLK, DT pin. Result is a 2 bit binary number: 00, 01, 10 or 11.
+    act_state = ( digitalRead ( ini_block.enc2_clk_pin ) << 1 ) +
+                digitalRead ( ini_block.enc2_dt_pin ) ;
+    inx = ( old_state << 2 ) + act_state ;                        // Form index in enc_states
+    locrotcount += enc_states[inx] ;                              // Get delta: 0, +1 or -1
+    if ( locrotcount == 4 )
+    {
+      enc2_rotationcount++ ;                                           // Divide by 4
+      locrotcount = 0 ;
+    }
+    else if ( locrotcount == -4 )
+    {
+      enc2_rotationcount-- ;                                           // Divide by 4
+      locrotcount = 0 ;
+    }
+    old_state = act_state ;                                       // Remember current status
+    enc2_inactivity = 0 ;                                          // Mark activity
+  }
+#endif
+
+#endif // SECOND_ENCODER
 
 //**************************************************************************************************
 //                                S H O W S T R E A M T I T L E                                    *
@@ -1843,6 +2039,13 @@ void readIOprefs()
       { "pin_enc_up",    &ini_block.enc_up_pin,       -1 }, // ZIPPY B5 side switch up
       { "pin_enc_dwn",   &ini_block.enc_dwn_pin,      -1 }, // ZIPPY B5 side switch down
       { "pin_enc_sw",    &ini_block.enc_sw_pin,       -1 },
+#ifdef SECOND_ENCODER
+      { "pin_enc2_clk",   &ini_block.enc2_clk_pin,      -1 }, // Rotary encoder2 CLK
+      { "pin_enc2_dt",    &ini_block.enc2_dt_pin,       -1 }, // Rotary encoder2 DT
+      { "pin_enc2_up",    &ini_block.enc2_up_pin,       -1 }, // ZIPPY B5 2 side switch up
+      { "pin_enc2_dwn",   &ini_block.enc2_dwn_pin,      -1 }, // ZIPPY B5 2 side switch down
+      { "pin_enc2_sw",    &ini_block.enc2_sw_pin,       -1 },
+#endif
       { "pin_tft_cs",    &ini_block.tft_cs_pin,       -1 }, // Display SPI version
       { "pin_tft_dc",    &ini_block.tft_dc_pin,       -1 }, // Display SPI version
       { "pin_tft_scl",   &ini_block.tft_scl_pin,      -1 }, // Display I2C version
@@ -2741,6 +2944,42 @@ void setup()
                 ini_block.enc_sw_pin ) ;
     }
   #endif
+
+ // Init settings for rotary switch/encoder 2 (if existing).
+ #ifdef SECOND_ENCODER
+  #ifdef ZIPPYB5
+    if ( ( ini_block.enc2_up_pin + ini_block.enc2_dwn_pin + ini_block.enc2_sw_pin ) > 2 )
+    {
+      attachInterrupt ( ini_block.enc2_up_pin,  isr_enc2_turn,   CHANGE ) ;
+      attachInterrupt ( ini_block.enc2_dwn_pin, isr_enc2_turn,   CHANGE ) ;
+      attachInterrupt ( ini_block.enc2_sw_pin,  isr_enc2_switch, CHANGE ) ;
+      ESP_LOGI ( TAG, "ZIPPY side switch 2 is enabled" ) ;
+    }
+    else
+    {
+      ESP_LOGI ( TAG, "ZIPPY side switch 2 is disabled (%d/%d/%d)",
+                ini_block.enc2_up_pin,
+                ini_block.enc2_dwn_pin,
+                ini_block.enc2_sw_pin ) ;
+    }
+  #else
+    if ( ( ini_block.enc2_clk_pin + ini_block.enc2_dt_pin + ini_block.enc2_sw_pin ) > 2 )
+    {
+      attachInterrupt ( ini_block.enc2_clk_pin, isr_enc2_turn,   CHANGE ) ;
+      attachInterrupt ( ini_block.enc2_dt_pin,  isr_enc2_turn,   CHANGE ) ;
+      attachInterrupt ( ini_block.enc2_sw_pin,  isr_enc2_switch, CHANGE ) ;
+      ESP_LOGI ( TAG, "Rotary encoder 2 is enabled" ) ;
+    }
+    else
+    {
+      ESP_LOGI ( TAG, "Rotary encoder 2 is disabled (%d/%d/%d)",
+                ini_block.enc2_clk_pin,
+                ini_block.enc2_dt_pin,
+                ini_block.enc2_sw_pin ) ;
+    }
+  #endif
+#endif
+
   if ( NetworkFound )
   {
     gettime() ;                                           // Sync time
@@ -3079,7 +3318,15 @@ void handleVolPub()
   }
 }
 
+// 260405 HIER BEN IK MET ALLES OMZETTEN NAAR TWEE ENCODERS.
+// ALS HET GOED IS WORDEN ALLE ENCODRS NU GOED GEINITIALISEERD EN BEHANDELD. MAAR WAT
+// ERMEE MOET GEBEUREN STAAT IN DEZE FUNCTIE. MISSCHIEN ALLES OMSCHRIJEN ZODAT IEDERE ENCODER MAAR VOOR 1 DING IS?
+// WEL EVEN UITZOEKEN HOE HET DAN ZIT MET DE *DRIE* MODI VOOR DE KNOP: VOLUME, PRESET EN NOG IETS (WAT??) 
+// IK DENK DAT IK HET HET BESTE KAN DOEN DAT JE BIJ #IFDEF SECOND_ENCODER, DE CHK_ENC HELMEAA LOPNIEUW 
+// DEFINIEERT, ZONDER AL HET STUK WAARBIJ JE DE FUNCTIE KAN VERANDREN DOOR ER MEERDERE KEREN OP TE KLIKKEN.
+// iK MOET OOK IN DE PREFS NOG DE IO-POOTJES DEFNIIEREN WAAROP DE TWEEDE ENCODER ZIT. EN M NOG HARDWAREMATIG AANSLUITEN...
 
+// 
 //**************************************************************************************************
 //                                           C H K _ E N C                                         *
 //**************************************************************************************************

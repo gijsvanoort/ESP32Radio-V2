@@ -44,6 +44,8 @@
 
   // Define ZIPPYB5 if a ZIPPY B5 Side Switch is used instead of a rotary switch
   //#define ZIPPYB5
+  // Use a second encoder (enc2 in prefs)
+  #define SECOND_ENCODER
 
   // End of configuration parameters.
   #define CONFIG_H
