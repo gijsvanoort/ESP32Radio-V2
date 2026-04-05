@@ -3332,6 +3332,7 @@ void handleVolPub()
 //**************************************************************************************************
 // See if rotary encoder is activated and perform its functions.                                   *
 //**************************************************************************************************
+#ifndef SECOND_ENCODER
 void chk_enc()
 {
   static int16_t enc_preset ;                                 // Selected preset
@@ -3507,7 +3508,264 @@ void chk_enc()
   }
   rotationcount = 0 ;                                         // Reset
 }
+#else /* SECOND_ENCODER is defined */
+void chk_enc1() /* Check first encoder in two-encoder mode. This encoder does volume only. */
+{
+  static int16_t enc_preset ;                                 // Selected preset
+  String         tmp, tmp2 ;                                  // Temporary strings
 
+  if ( singleclick || doubleclick ||                          // Any activity?
+       tripleclick || longclick ||
+       ( rotationcount != 0 ) )
+  {
+    blset ( true ) ;                                          // Yes, activate display if needed
+  }
+  else
+  {
+    return;                                                  // No, nothing to do
+  }
+
+  // No check for double-click/single-click because they don't have a function anyway
+  if ( singleclick ) /* Mute/unmute */
+  {
+    ESP_LOGI ( TAG, "Encoder 1 Single click" ) ;
+    singleclick = false ;
+    
+    if ( muteflag )
+    {
+      tftset ( 2, icyname ) ;                             // Restore screen segment bottom part
+    }
+    else
+    {
+      tftset ( 3, "Mute" ) ; // TODO: Dit moet niet heir gebeuren, want er zijn meerdere manieren om te muten. Moet een mqqt message 'mute' gestuurd wroden die ergens anders wordt afgehandeld. 
+    }
+    muteflag = !muteflag ;                                // Mute/unmute
+    ESP_LOGI ( TAG, "Mute set to %d", muteflag ) ;
+  }
+
+  if ( longclick )                                            // Check for long click
+  {
+    ESP_LOGI ( TAG, "Long click") ;
+    myQueueSend ( sdqueue, &stopcmd ) ;                       // Stop player
+    myQueueSend ( radioqueue, &stopcmd ) ;                    // Stop player
+    //if ( datamode != STOPPED )
+    //{
+    //  setdatamode ( STOPREQD ) ;                            // Request STOP, do not touch longclick flag
+    //}
+    //else
+    //{
+    longclick = false ;                                       // Reset condition
+  }
+  if ( rotationcount == 0 )                                   // Any rotation?
+  {
+    return ;                                                  // No, return
+  }
+  //ESP_LOGI ( TAG, "Rotation count %d", rotationcount ) ;
+  if ( ! muteflag )                                       // Do not handle if muted
+  {
+    rotationcount *= 4 ;                                  // Step by 4 percent
+    if ( ( ini_block.reqvol + rotationcount ) < 0 )       // Limit volume
+    {
+      ini_block.reqvol = 0 ;                              // Limit to normal values
+    }
+    else if ( ( ini_block.reqvol + rotationcount ) > 100 )
+    {
+      ini_block.reqvol = 100 ;                            // Limit to normal values
+    }
+    else
+    {
+      ini_block.reqvol += rotationcount ;
+    }
+  }
+  rotationcount = 0 ;                                         // Reset
+}
+
+// NU BEN IK HIER  DE FUNCTIE HIERBOVEN DOET NU ALLEEN VOLUME EN MUTE. DE FUNCTIE HIERONDER MOET NOG AANGEPAST.
+// DE OPMERKING BOVEN (HIER BEN IK) LAAT IK STAAN OMDAT ER NOG WAT NUTTIGE INFORMATIE INSTAAT
+// IN DE FUNCTIE HIERONDER GEOD ZORGEN DATIK ALLE ENC2_VARIABELEN GEBRUIK (BEGINNETJE AL GEMAAKT)
+void chk_enc2() /* Check second encoder in two-encoder mode. This encoder does preset/track. */
+{
+  static int16_t enc2_preset ;                                 // Selected preset
+  String         tmp, tmp2 ;                                  // Temporary strings
+
+  if ( enc2_menu_mode != VOLUME )                              // In default mode?
+  {
+    if ( enc2_inactivity > 50 )                                // No, more than 5 seconds inactive
+    {
+      enc2_inactivity = 0 ;
+      enc2_menu_mode = VOLUME ;                                // Return to VOLUME mode
+      ESP_LOGI ( TAG, "Encoder 2 mode back to VOLUME" ) ;
+    }
+  }
+  if ( enc2_singleclick || enc2_doubleclick ||                          // Any activity?
+       enc2_tripleclick || enc2_longclick ||
+       ( enc2_rotationcount != 0 ) )
+  {
+    blset ( true ) ;                                          // Yes, activate display if needed
+  }
+  else
+  {
+    return ;                                                  // No, nothing to do
+  }
+  if ( enc2_tripleclick )                                          // First handle triple click
+  {
+    ESP_LOGI ( TAG, "Encoder 2 Triple click" ) ;
+    enc2_tripleclick = false ;                                     // Reset flag
+    #ifdef SDCARD
+      if ( SD_filecount )                                     // Tracks on SD?
+      {
+        enc2_menu_mode = TRACK ;                               // Swich to TRACK mode
+        ESP_LOGI ( TAG, "Encoder 2 mode set to TRACK" ) ;
+        tftset ( 3, "Turn to select track\n"                  // Show current option
+                    "Press to confirm" ) ;
+        getSDFileName ( +1 ) ;                                // Start with next file on SD
+      }
+      else
+      {
+        ESP_LOGI ( TAG, "No tracks on SD" ) ;
+      }
+    #endif
+  }
+  if ( enc2_doubleclick )                                          // Handle the doubleclick
+  {
+    ESP_LOGI ( TAG, "Encoder 2 Double click") ;
+    enc2_doubleclick = false ;
+    enc2_menu_mode = PRESET ;                                  // Swich to PRESET mode
+    ESP_LOGI ( TAG, "Encoder 2 mode set to PRESET" ) ;
+    tftset ( 3, "Turn to select station\n"                    // Show current option
+                "Press to confirm" ) ;
+    enc2_preset = presetinfo.preset ;                          // Start with current preset
+    updateNr ( &enc2_preset, presetinfo.highest_preset,        // plus 1
+               1, true ) ;
+  } // TOT HIER HEB IK ENC2_ variabele TOEGEVOEGD
+  if ( singleclick )
+  {
+    ESP_LOGI ( TAG, "Single click" ) ;
+    singleclick = false ;
+    switch ( enc_menu_mode )                                  // Which mode (VOLUME, PRESET)?
+    {
+      case VOLUME :
+        if ( muteflag )
+        {
+          tftset ( 2, icyname ) ;                             // Restore screen segment bottom part
+        }
+        else
+        {
+          tftset ( 3, "Mute" ) ;
+        }
+        muteflag = !muteflag ;                                // Mute/unmute
+        ESP_LOGI ( TAG, "Mute set to %d", muteflag ) ;
+        break ;
+      case PRESET :
+        nextPreset ( enc_preset ) ;                           // Make a definite choice
+        enc_menu_mode = VOLUME ;                              // Back to default mode
+        myQueueSend ( radioqueue, &startcmd ) ;               // Signal radiofuncs()
+        tftset ( 2, icyname ) ;                               // Restore screen segment bottom part
+        break ;
+    #ifdef SDCARD
+      case TRACK :
+        myQueueSend ( sdqueue, &startcmd ) ;                  // Signal SDfuncs()
+        enc_menu_mode = VOLUME ;                              // Back to default mode
+        tftset ( 2, icyname ) ;                               // Restore screen segment bottom part
+        break ;
+    #endif
+      default :
+        break ;
+    }
+  }
+  if ( longclick )                                            // Check for long click
+  {
+    ESP_LOGI ( TAG, "Long click") ;
+    myQueueSend ( sdqueue, &stopcmd ) ;                       // Stop player
+    myQueueSend ( radioqueue, &stopcmd ) ;                    // Stop player
+    //if ( datamode != STOPPED )
+    //{
+    //  setdatamode ( STOPREQD ) ;                            // Request STOP, do not touch longclick flag
+    //}
+    //else
+    //{
+    longclick = false ;                                       // Reset condition
+    #ifdef SDCARD
+      if ( SD_filecount )
+      {
+        getSDFileName ( -1 ) ;                                // Random choice
+        myQueueSend ( sdqueue, &startcmd ) ;                  // Start random track
+      }
+    #endif
+  }
+  if ( rotationcount == 0 )                                   // Any rotation?
+  {
+    return ;                                                  // No, return
+  }
+  //ESP_LOGI ( TAG, "Rotation count %d", rotationcount ) ;
+  switch ( enc_menu_mode )                                    // Which mode (VOLUME, PRESET, TRACK)?
+  {
+    case VOLUME :
+      if ( ! muteflag )                                       // Do not handle if muted
+      {
+        rotationcount *= 4 ;                                  // Step by 4 percent
+        if ( ( ini_block.reqvol + rotationcount ) < 0 )       // Limit volume
+        {
+          ini_block.reqvol = 0 ;                              // Limit to normal values
+        }
+        else if ( ( ini_block.reqvol + rotationcount ) > 100 )
+        {
+          ini_block.reqvol = 100 ;                            // Limit to normal values
+        }
+        else
+        {
+          ini_block.reqvol += rotationcount ;
+        }
+      }
+      break ;
+    case PRESET :
+      if ( ( enc_preset + rotationcount ) < 0 )               // Negative not allowed
+      {
+        enc_preset = 0 ;                                      // Stay at 0
+      }
+      else
+      {
+        enc_preset += rotationcount ;                         // Next preset
+      }
+      readhostfrompref ( enc_preset, &tmp, &tmp2 ) ;          // Get host spec and possible comment
+      if ( tmp == "" )                                        // End of presets?
+      {
+        enc_preset = 0 ;                                      // Yes, wrap
+        readhostfrompref ( enc_preset, &tmp, &tmp2 ) ;        // Get host spec and possible comment
+      }
+      ESP_LOGI ( TAG, "Preset is %d", enc_preset ) ;
+      // Show just comment if available.  Otherwise the preset itself.
+      if ( tmp2 != "" )                                       // Symbolic name present?
+      {
+        tmp = tmp2 ;                                          // Yes, use it
+      }
+      chomp ( tmp ) ;                                         // Remove garbage from description
+      tftset ( 3, tmp ) ;                                     // Set screen segment bottom part
+      break ;
+#ifdef SDCARD
+    case TRACK :
+      if ( rotationcount > 0 )
+      {
+        getSDFileName ( SD_curindex + rotationcount ) ;      // Select next file on SD
+        ESP_LOGI ( TAG, "Select track %s",                   // Show for debug
+                    getCurrentSDFileName() ) ;
+        tftset ( 3, getCurrentShortSDFileName() ) ;          // Set screen segment bottom part
+      }
+      break ;
+#endif
+    default :
+      break ;
+  }
+  rotationcount = 0 ;                                         // Reset
+}
+
+void chk_enc()
+{
+  chk_enc1();
+  chk_enc2();
+}
+
+#endif
 //**************************************************************************************************
 //                                     S P F U N C S                                               *
 //**************************************************************************************************
